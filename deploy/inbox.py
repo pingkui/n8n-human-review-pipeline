@@ -9,6 +9,7 @@ import html
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,7 +26,7 @@ def load():
         with open(STATE_FILE) as f:
             return json.load(f)
     except (OSError, ValueError):
-        return {"pending": [], "published": [], "audit": []}
+        return {"pending": [], "published": [], "audit": [], "inflight": []}
 
 
 def save(state):
@@ -70,6 +71,13 @@ button{font:inherit;padding:6px 14px;margin-right:6px;cursor:pointer}
 <label>Topic <input name=topic required minlength=5 placeholder="e.g. Why we review every AI-written post"></label>
 <label>Facts the post may use, one per line (numbers in the draft must come from here)
 <textarea name=facts rows=3></textarea></label><button>Send to pipeline</button></form>""")
+    inflight = state.get("inflight", [])
+    if inflight:
+        out.append(f"<h2>Drafting ({len(inflight)})</h2>")
+        for x in inflight:
+            out.append(f"<div class=card><b>{e(str(x['client']))}</b> - {e(str(x['topic']))} "
+                       f"<span class=muted>(sent {int(time.time() - x['since'])}s ago; the model is writing, "
+                       f"this page updates by itself)</span></div>")
     out.append(f"<h2>Waiting for review ({len(state['pending'])})</h2>")
     for p in reversed(state["pending"]):
         checks = "".join(
@@ -91,6 +99,7 @@ button{font:inherit;padding:6px 14px;margin-right:6px;cursor:pointer}
     out.append(f"<h2>Audit log ({len(state['audit'])})</h2>")
     for a in reversed(state["audit"]):
         out.append(f"<div class=card><span class=muted>{e(json.dumps({k: v for k, v in a.items() if k != 'final_text'}))}</span></div>")
+    out.append("<script>\nconst sig = s => [(s.inflight||[]).length, s.pending.length, s.published.length, s.audit.length].join('-');\nlet last = null;\nsetInterval(async () => {\n  try {\n    const s = await (await fetch('/state')).json();\n    const now = sig(s);\n    if (last === null) { last = now; return; }\n    const typing = [...document.querySelectorAll('input:not([type=hidden]),textarea')].some(i => i.value.trim() && i.defaultValue !== i.value);\n    if (now !== last && !typing) location.href = '/';\n    else if (now !== last) document.title = '(new) Review inbox';\n  } catch (e) {}\n}, 3000);\n</script>")
     return "".join(out).encode()
 
 
@@ -133,6 +142,7 @@ class H(BaseHTTPRequestHandler):
                 if self.path == "/notify":
                     data["id"] = f"{data['request_id']}-{data['attempt']}"
                     st["pending"].append(data)
+                    st["inflight"] = [x for x in st.get("inflight", []) if x["request_id"] != str(data["request_id"])]
                 elif self.path == "/publish":
                     st["published"].append(data)
                 else:
@@ -150,6 +160,16 @@ class H(BaseHTTPRequestHandler):
             facts = [x.strip() for x in form.get("facts", "").splitlines() if x.strip()]
             code, out = post_json(N8N_URL + "/webhook/content-request",
                                   {"client": form.get("client"), "topic": form.get("topic"), "facts": facts})
+            if code == 202:
+                try:
+                    rid = str(json.loads(out)["request_id"])
+                    with LOCK:
+                        st = load()
+                        st.setdefault("inflight", []).append(
+                            {"request_id": rid, "client": form.get("client"), "topic": form.get("topic"), "since": time.time()})
+                        save(st)
+                except (ValueError, KeyError):
+                    pass
             return self._redirect("Sent to the pipeline; the draft appears below in a few seconds (reload)."
                                   if code == 202 else f"Pipeline answered {code}: {out[:200]}")
         if self.path == "/decide":
