@@ -1,0 +1,545 @@
+{
+  "id": "contentReview01",
+  "name": "Content pipeline with human review",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "content-request",
+      "name": "Content request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "7f0f3a52-4f1d-4c5e-9a53-2f6a1c0d9b11"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Per-client profiles. Fictional examples: voice, audience, limits and banned words differ per client.\nconst CLIENTS = {\n  'board-advisor': { voice: 'formal, concise, measured; no hype', audience: 'board-level marketing advisors',\n                     max_chars: 900, banned: ['game-changer', 'revolutionary', 'guaranteed', 'synergy'] },\n  'startup-coach': { voice: 'friendly, practical, direct', audience: 'early-stage founders',\n                     max_chars: 700, banned: ['guaranteed', '10x', 'hack'] },\n  'retail-brand':  { voice: 'playful and short', audience: 'online shoppers',\n                     max_chars: 400, banned: ['cheap', 'guarantee'] },\n};\nconst body = $input.first().json.body || {};\nconst errors = [];\nif (!body.client || !CLIENTS[body.client]) errors.push('client must be one of: ' + Object.keys(CLIENTS).join(', '));\nif (!body.topic || String(body.topic).trim().length < 5) errors.push('topic is required (min 5 characters)');\nif (errors.length) return [{ json: { ok: false, errors } }];\nconst facts = Array.isArray(body.facts) ? body.facts.map(String) : [];\nreturn [{ json: { ok: true, request_id: $execution.id, client: body.client, topic: String(body.topic).trim(),\n                  facts, profile: CLIENTS[body.client], attempt: 1, feedback: '', previous_draft: '' } }];"
+      },
+      "id": "load-client-profile",
+      "name": "Load client profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "input-valid?",
+      "name": "Input valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'rejected_input', errors: $json.errors }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-400",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', request_id: $json.request_id, note: 'A draft will be sent to the reviewer, who approves, revises or rejects it.' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "respond-accepted",
+      "name": "Respond accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst p = c.profile;\nconst system = `You write short LinkedIn posts for the client described below. Voice: ${p.voice}. Audience: ${p.audience}. ` +\n  `Hard limits: at most ${p.max_chars} characters; never use these words: ${p.banned.join(', ')}. ` +\n  `Use only the facts provided. Do not invent statistics, names or customer claims. If no facts are provided, use no numbers.`;\nlet user = `Topic: ${c.topic}\\nFacts you may use: ${c.facts.length ? c.facts.join(' | ') : '(none)'}`;\nif (c.feedback) {\n  user += `\\n\\nREVISION FEEDBACK from the human reviewer:\\n${c.feedback}\\n\\nPrevious draft:\\n${c.previous_draft}\\n\\nRewrite the post to address the feedback.`;\n}\nreturn [{ json: { ...c, llm_request: { model: $env.LLM_MODEL,\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user }] } } }];"
+      },
+      "id": "build-prompt",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLM_BASE_URL + '/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.LLM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.llm_request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "draft-with-llm",
+      "name": "Draft with LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic checks on the model output. The model is never trusted to police itself.\nconst ctx = $('Build prompt').first().json;\nconst res = $input.first().json;\nconst draft = String(res.choices?.[0]?.message?.content ?? '').trim();\nconst p = ctx.profile;\nconst lower = draft.toLowerCase();\nconst checks = [];\nchecks.push({ name: 'not_empty', ok: draft.length > 0 });\nchecks.push({ name: 'length_within_limit', ok: draft.length <= p.max_chars, detail: `${draft.length}/${p.max_chars}` });\nconst hits = p.banned.filter(w => lower.includes(w.toLowerCase()));\nchecks.push({ name: 'no_banned_words', ok: hits.length === 0, detail: hits.join(', ') });\nconst factText = ctx.facts.join(' ').toLowerCase();\nconst nums = draft.match(/\\d[\\d.,]*%?/g) || [];\nconst unsupported = nums.filter(n => !factText.includes(n.toLowerCase()));\nchecks.push({ name: 'numbers_supported_by_facts', ok: unsupported.length === 0, detail: unsupported.join(', ') });\nconst { llm_request, ...rest } = ctx;\nreturn [{ json: { ctx: rest, draft, checks, passed: checks.every(c => c.ok) } }];"
+      },
+      "id": "check-draft",
+      "name": "Check draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFY_URL }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ request_id: $json.ctx.request_id, client: $json.ctx.client, topic: $json.ctx.topic, attempt: $json.ctx.attempt, draft: $json.draft, checks: $json.checks, checks_passed: $json.passed, resume_url: $execution.resumeUrl, reply_with: { decision: 'approve | revise | reject', feedback: 'required for revise', reviewer: 'your name' } }) }}",
+        "options": {}
+      },
+      "id": "notify-reviewer",
+      "name": "Notify reviewer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "options": {},
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 24,
+        "resumeUnit": "hours"
+      },
+      "id": "await-human-review",
+      "name": "Await human review",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        200
+      ],
+      "webhookId": "b3c1d7e8-61a2-4e40-8c7f-5d2e9a4b0c22"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Check draft').first().json;\nconst body = $input.first().json.body || {};\nconst MAX_ATTEMPTS = 3;\nconst decision = ['approve', 'revise', 'reject'].includes(body.decision) ? body.decision : 'expired';\nconst feedback = String(body.feedback || '');\nconst ctx = prev.ctx;\nreturn [{ json: {\n  decision, ctx, draft: prev.draft, checks_passed: prev.passed, feedback,\n  reviewer: String(body.reviewer || 'unknown'),\n  can_revise: ctx.attempt < MAX_ATTEMPTS,\n  next: decision === 'revise'\n    ? { ...ctx, attempt: ctx.attempt + 1, feedback: feedback || 'No specific feedback; tighten and improve.', previous_draft: prev.draft }\n    : null,\n} }];"
+      },
+      "id": "interpret-decision",
+      "name": "Interpret decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "approved?",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PUBLISH_URL }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ request_id: $json.ctx.request_id, client: $json.ctx.client, content: $json.draft, attempt: $json.ctx.attempt, reviewer: $json.reviewer }) }}",
+        "options": {}
+      },
+      "id": "publish",
+      "name": "Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "revise",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.can_revise }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "revise?",
+      "name": "Revise?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json.next }];"
+      },
+      "id": "prepare-revision",
+      "name": "Prepare revision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Interpret decision').first().json;\nlet outcome = 'published';\nif (d.decision === 'reject') outcome = 'rejected';\nelse if (d.decision === 'expired') outcome = 'expired_no_decision';\nelse if (d.decision === 'revise') outcome = 'revision_limit_reached';\nreturn [{ json: {\n  request_id: d.ctx.request_id, client: d.ctx.client, topic: d.ctx.topic, attempts: d.ctx.attempt,\n  outcome, reviewer: d.reviewer, approved_with_failed_checks: d.decision === 'approve' && !d.checks_passed,\n  final_text: outcome === 'published' ? d.draft : null,\n} }];"
+      },
+      "id": "audit-record",
+      "name": "Audit record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AUDIT_URL }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "log-audit",
+      "name": "Log audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Content request": {
+      "main": [
+        [
+          {
+            "node": "Load client profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load client profile": {
+      "main": [
+        [
+          {
+            "node": "Input valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond accepted": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Draft with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft with LLM": {
+      "main": [
+        [
+          {
+            "node": "Check draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check draft": {
+      "main": [
+        [
+          {
+            "node": "Notify reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify reviewer": {
+      "main": [
+        [
+          {
+            "node": "Await human review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Await human review": {
+      "main": [
+        [
+          {
+            "node": "Interpret decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret decision": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Publish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Revise?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish": {
+      "main": [
+        [
+          {
+            "node": "Audit record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revise?": {
+      "main": [
+        [
+          {
+            "node": "Prepare revision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Audit record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare revision": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit record": {
+      "main": [
+        [
+          {
+            "node": "Log audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
