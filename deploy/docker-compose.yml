@@ -1,0 +1,23 @@
+# Local deployment: n8n + a small reviewer inbox. Both ports are bound to 127.0.0.1 on purpose.
+services:
+  n8n:
+    image: n8nio/n8n:2.42.5
+    restart: unless-stopped
+    ports: ["127.0.0.1:5678:5678"]
+    env_file: .env                     # LLM_BASE_URL, LLM_API_KEY, LLM_MODEL (not committed)
+    environment:
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      WEBHOOK_URL: http://n8n:5678/    # resume links must be reachable by the inbox container
+      NOTIFY_URL: http://inbox:8089/notify
+      PUBLISH_URL: http://inbox:8089/publish
+      AUDIT_URL: http://inbox:8089/audit
+    volumes: ["n8n_data:/home/node/.n8n", "../workflow.json:/work/workflow.json:ro"]
+  inbox:
+    image: python:3.12-slim
+    restart: unless-stopped
+    command: ["python", "/app/inbox.py"]
+    ports: ["127.0.0.1:8089:8089"]
+    environment: { N8N_URL: "http://n8n:5678", STATE_FILE: /data/state.json }
+    volumes: ["./inbox.py:/app/inbox.py:ro", "inbox_data:/data"]
+volumes: { n8n_data: {}, inbox_data: {} }

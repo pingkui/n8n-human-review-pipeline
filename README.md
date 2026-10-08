@@ -67,6 +67,16 @@ curl -X POST "$RESUME_URL" -H 'Content-Type: application/json' \
   -d '{"decision":"revise","feedback":"shorter, one concrete example","reviewer":"Sam"}'
 ```
 
+## Deploy it locally (to try the whole loop in a browser)
+`deploy/` has a docker compose setup: n8n plus a small reviewer inbox page where you submit requests and approve, revise or reject drafts.
+Both ports are bound to `127.0.0.1`; the inbox has no login, so reach it through an SSH tunnel or put authentication in front of it.
+
+```bash
+cp deploy/.env.example deploy/.env      # fill in LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
+deploy/deploy.sh                        # imports and publishes the workflow, starts both services
+# inbox: http://127.0.0.1:8089     n8n editor: http://127.0.0.1:5678
+```
+
 ## Test results
 `python3 test.py`: **12/12 checks pass** against a real n8n container.
 It covers invalid input (400, no model call), a full revise-then-approve round (the published text equals the approved draft,
