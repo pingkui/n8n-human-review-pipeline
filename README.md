@@ -1,3 +1,5 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # n8n content pipeline with a human review gate
 
 An n8n workflow that drafts a social post with an LLM, **checks the draft with deterministic code**, sends it to a human
@@ -33,6 +35,15 @@ flowchart LR
   a timeout after 24 hours) is treated as "no decision", never as approval.
 - **Audit record** for every run: request id, client, attempts, outcome, reviewer, and the final text only if it was published.
 
+## Documentation
+| document | read it for |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | node by node, the run context, the four checks, decisions and outcomes, known gaps |
+| [`docs/RUNNING.md`](docs/RUNNING.md) | running the test, using it in your own n8n, deploying the reviewer page locally, troubleshooting |
+| [`docs/TESTING.md`](docs/TESTING.md) | the 12 checks, the mock server, what is not tested, adding a check |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | the resume link, the reviewer page having no login, prompt steering, secrets, privacy |
+| [`docs/EXTENDING.md`](docs/EXTENDING.md) | adding a client, changing the reviewer channel and publish target, changing the model |
+
 ## Files
 | file | purpose |
 |---|---|
@@ -40,6 +51,7 @@ flowchart LR
 | `build_workflow.py` | generates `workflow.json`; keeps the Code-node scripts readable |
 | `mock_server.py` | offline stand-in for the LLM API, the reviewer channel, the CMS and the audit log |
 | `test.py` | end-to-end test against a real n8n container |
+| `deploy/` | docker compose, the reviewer page `inbox.py` and `deploy.sh` for a local deployment |
 
 ## Run it
 Needs Docker. Tested with n8n 2.42.5.
